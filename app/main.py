@@ -1,15 +1,20 @@
-from fastapi import FastAPI
 from contextlib import asynccontextmanager
+import os
+from fastapi import FastAPI
 from app.database import Base, engine
 from app.routers import health, jobs, rag
 from app.services.embedding import get_model
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Pre-load the embedding model on startup so the first request is fast
-    print("Pre-loading BGE-M3 embedding model...")
-    get_model()
-    print("Model loaded successfully!")
+    preload_enabled = os.getenv("EMBEDDING_PRELOAD_ON_STARTUP", "true").lower() == "true"
+    if preload_enabled:
+        # Pre-load the embedding model on startup so the first request is fast
+        print("Pre-loading BGE-M3 embedding model...")
+        get_model()
+        print("Model loaded successfully!")
+    else:
+        print("Embedding model preload disabled by EMBEDDING_PRELOAD_ON_STARTUP.")
     yield
 
 # Create tables on startup (use Alembic for production migrations)

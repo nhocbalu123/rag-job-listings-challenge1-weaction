@@ -3,17 +3,21 @@ Embedding service using BGE-M3 via FlagEmbedding.
 """
 
 import os
+from threading import Lock
 from typing import List
 from FlagEmbedding import BGEM3FlagModel
 
 _model = None
+_model_lock = Lock()
 
 def get_model():
     global _model
     if _model is None:
-        model_name = os.getenv("EMBEDDING_MODEL", "BAAI/bge-m3")
-        # use_fp16=False is usually faster and safer on CPU
-        _model = BGEM3FlagModel(model_name, use_fp16=False)
+        with _model_lock:
+            if _model is None:
+                model_name = os.getenv("EMBEDDING_MODEL", "BAAI/bge-m3")
+                # use_fp16=False is usually faster and safer on CPU
+                _model = BGEM3FlagModel(model_name, use_fp16=False)
     return _model
 
 def embed(text: str) -> List[float]:
@@ -27,5 +31,9 @@ def embed(text: str) -> List[float]:
     return vec.tolist()
 
 def cosine_similarity(a: List[float], b: List[float]) -> float:
+    if len(a) != len(b):
+        raise ValueError(
+            f"Embedding dimension mismatch: len(a)={len(a)}, len(b)={len(b)}"
+        )
     dot = sum(x * y for x, y in zip(a, b))
     return dot  # both are already L2-normalized by the model

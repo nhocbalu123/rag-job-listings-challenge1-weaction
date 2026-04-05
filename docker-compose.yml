@@ -25,8 +25,11 @@ services:
       DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-ragdb}
       HF_HOME: /tmp/huggingface
       TRANSFORMERS_CACHE: /tmp/huggingface
+      EMBEDDING_PRELOAD_ON_STARTUP: "false"
     env_file:
       - .env
+    volumes:
+      - huggingface_cache:/tmp/huggingface
     ports:
       - "8000:8000"
     depends_on:
@@ -40,3 +43,4 @@ services:
 
 volumes:
   postgres_data:
+  huggingface_cache:

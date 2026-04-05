@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models import RAGQueryRequest, RAGQueryResponse
@@ -20,7 +20,10 @@ def rag_query(payload: RAGQueryRequest, db: Session = Depends(get_db)):
     4. Logs the query + result to DB for tracking.
     """
     top_jobs = retrieve_top_k(db, payload.query, payload.top_k)
-    answer   = generate_answer(payload.query, top_jobs)
+    try:
+        answer = generate_answer(payload.query, top_jobs)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
     log      = log_query(
         db,
         query=payload.query,
