@@ -1,7 +1,22 @@
+import os
 from typing import List, Tuple
 from sqlalchemy.orm import Session
 from app.models import JobListing, QueryLog
 from app.services.embedding import embed, cosine_similarity
+
+
+ELLIPSIS = "..."
+
+
+def _get_positive_int_env(name: str, default: int) -> int:
+    value = os.getenv(name, str(default))
+    try:
+        parsed = int(value)
+    except ValueError as e:
+        raise ValueError(f"{name} must be a positive integer. Got: {value}") from e
+    if parsed <= 0:
+        raise ValueError(f"{name} must be a positive integer. Got: {parsed}")
+    return parsed
 
 
 def retrieve_top_k(db: Session, query: str, top_k: int) -> List[JobListing]:
@@ -29,7 +44,6 @@ def generate_answer(query: str, jobs: List[JobListing]) -> str:
             "Try adding more jobs via POST /jobs."
         )
 
-    import os
     from google import genai
 
     api_key = os.getenv("GEMINI_API_KEY")
@@ -40,9 +54,9 @@ def generate_answer(query: str, jobs: List[JobListing]) -> str:
         )
     client = genai.Client(api_key=api_key)
     GENERATOR_MODEL = os.getenv("GENERATOR_MODEL", "gemma-4-31b-it")
-    max_jobs_in_context = int(os.getenv("RAG_MAX_JOBS_IN_CONTEXT", "5"))
-    max_description_chars = int(os.getenv("RAG_MAX_DESCRIPTION_CHARS", "1000"))
-    max_total_context_chars = int(os.getenv("RAG_MAX_TOTAL_CONTEXT_CHARS", "4000"))
+    max_jobs_in_context = _get_positive_int_env("RAG_MAX_JOBS_IN_CONTEXT", 5)
+    max_description_chars = _get_positive_int_env("RAG_MAX_DESCRIPTION_CHARS", 1000)
+    max_total_context_chars = _get_positive_int_env("RAG_MAX_TOTAL_CONTEXT_CHARS", 4000)
     context_separator = os.getenv("RAG_CONTEXT_SEPARATOR", "\n\n")
     separator_len = len(context_separator)
 
@@ -51,8 +65,10 @@ def generate_answer(query: str, jobs: List[JobListing]) -> str:
     for j in jobs[:max_jobs_in_context]:
         description = j.description or ""
         if len(description) > max_description_chars:
-            if max_description_chars >= 3:
-                description = description[: max_description_chars - 3].rstrip() + "..."
+            if max_description_chars >= len(ELLIPSIS):
+                description = (
+                    description[: max_description_chars - len(ELLIPSIS)].rstrip() + ELLIPSIS
+                )
             else:
                 description = description[:max_description_chars]
 
@@ -100,7 +116,7 @@ Job listings:
         )
         return (response.text or "").strip()
     except Exception as e:
-        raise RuntimeError("Error generating answer") from e
+        raise RuntimeError(f"Error generating answer: {type(e).__name__}") from e
 
 
 def log_query(
