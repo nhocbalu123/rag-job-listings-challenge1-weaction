@@ -44,13 +44,17 @@ def generate_answer(query: str, jobs: List[JobListing]) -> str:
     max_description_chars = int(os.getenv("RAG_MAX_DESCRIPTION_CHARS", "1000"))
     max_total_context_chars = int(os.getenv("RAG_MAX_TOTAL_CONTEXT_CHARS", "4000"))
     context_separator = os.getenv("RAG_CONTEXT_SEPARATOR", "\n\n")
+    separator_len = len(context_separator)
 
     context_parts: List[str] = []
     current_context_chars = 0
     for j in jobs[:max_jobs_in_context]:
         description = j.description or ""
         if len(description) > max_description_chars:
-            description = description[: max_description_chars - 3].rstrip() + "..."
+            if max_description_chars >= 3:
+                description = description[: max_description_chars - 3].rstrip() + "..."
+            else:
+                description = description[:max_description_chars]
 
         # Delimiters + fenced description isolate untrusted listing content from instructions.
         job_context = (
@@ -66,11 +70,11 @@ def generate_answer(query: str, jobs: List[JobListing]) -> str:
             "```\n"
             "END_JOB_LISTING"
         )
-        separator_len = len(context_separator) if context_parts else 0
-        if current_context_chars + separator_len + len(job_context) > max_total_context_chars:
+        current_separator_len = separator_len if context_parts else 0
+        if current_context_chars + current_separator_len + len(job_context) > max_total_context_chars:
             break
         context_parts.append(job_context)
-        current_context_chars += separator_len + len(job_context)
+        current_context_chars += current_separator_len + len(job_context)
 
     context = context_separator.join(context_parts)
 
