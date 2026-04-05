@@ -43,7 +43,7 @@ def generate_answer(query: str, jobs: List[JobListing]) -> str:
     max_jobs_in_context = int(os.getenv("RAG_MAX_JOBS_IN_CONTEXT", "5"))
     max_description_chars = int(os.getenv("RAG_MAX_DESCRIPTION_CHARS", "1000"))
     max_total_context_chars = int(os.getenv("RAG_MAX_TOTAL_CONTEXT_CHARS", "4000"))
-    context_separator = "\n\n"
+    context_separator = os.getenv("RAG_CONTEXT_SEPARATOR", "\n\n")
 
     context_parts: List[str] = []
     current_context_chars = 0

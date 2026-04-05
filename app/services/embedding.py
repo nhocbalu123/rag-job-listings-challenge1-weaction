@@ -33,7 +33,8 @@ def embed(text: str) -> List[float]:
 def cosine_similarity(a: List[float], b: List[float]) -> float:
     if len(a) != len(b):
         raise ValueError(
-            f"Embedding dimension mismatch: len(a)={len(a)}, len(b)={len(b)}"
+            f"Embedding dimension mismatch: len(a)={len(a)}, len(b)={len(b)}. "
+            "This may indicate embeddings from different models or stale data."
         )
     dot = sum(x * y for x, y in zip(a, b))
     return dot  # both are already L2-normalized by the model
