@@ -1,6 +1,6 @@
 # RAG Job Listings API — challenge1-weaction
 
-> **Mini RAG pipeline** cho job listings: embed mô tả công việc bằng BGE-M3 → lưu Postgres → truy vấn semantic similarity → trả về context + Gemma 4 LLM answer.
+> **Mini RAG pipeline** for job listings: embed job descriptions with BGE-M3 → store in Postgres → coarse cosine retrieval (top 20) → rerank with bge-reranker-v2-m3 → return context + Gemma 4 LLM answer.
 
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.111-009688?logo=fastapi)](https://fastapi.tiangolo.com)
 [![Python](https://img.shields.io/badge/Python-3.11-blue?logo=python)](https://python.org)
@@ -13,10 +13,27 @@
 
 ```
 POST /jobs          → Embed text (BGE-M3, 1024-dim dense) → Store in Postgres
-POST /rag/query     → Embed query → Cosine similarity → Top-K jobs → Gemma 4 LLM answer
+POST /rag/query     → Embed query → Cosine top-20 → Rerank (bge-reranker-v2-m3) → top-K → Gemma 4 answer
 GET  /jobs          → List all job listings (paginated)
 GET  /jobs/{id}     → Retrieve single job by ID
 GET  /health        → API + DB connectivity check
+```
+
+**Two-stage retrieval pipeline:**
+```
+User Query
+│
+▼
+BGE-M3 Embed (1024-dim)
+│
+▼
+Cosine Search → Top 20 candidates (PostgreSQL JSON scan)
+│
+▼
+bge-reranker-v2-m3 → Top K
+│
+▼
+Gemma 4 (Google GenAI) → Structured Answer + QueryLog
 ```
 
 ```
@@ -31,9 +48,10 @@ rag-job-listings-challenge1-weaction/
 │   │   └── rag.py           # POST /rag/query
 │   └── services/
 │       ├── embedding.py     # BGE-M3 embedding (1024-dim), thread-safe lazy load
-│       └── rag_service.py   # retrieve_top_k, generate_answer (Gemma 4), log_query
+│       ├── reranker.py      # bge-reranker-v2-m3 singleton, rerank() function
+│       └── rag_service.py   # retrieve_and_rerank (two-stage), generate_answer, log_query
 ├── docs/
-│   ├── AVOIDANCE_TABLE.md   # 8 common mistakes avoided in this project
+│   ├── AVOIDANCE_TABLE.md   # 9 common mistakes avoided in this project
 │   ├── CHANGELOG.md         # Version history
 │   └── RUNBOOK.md           # Deploy, debug, and scale guide
 ├── Dockerfile               # Multi-stage, python:3.11-slim, non-root user
@@ -48,7 +66,7 @@ rag-job-listings-challenge1-weaction/
 
 ```bash
 # 1. Clone
-git clone https://github.com/YOUR_USERNAME/rag-job-listings-challenge1-weaction.git
+git clone https://github.com/<your-username>/rag-job-listings-challenge1-weaction.git
 cd rag-job-listings-challenge1-weaction
 
 # 2. Configure env
@@ -69,7 +87,7 @@ curl http://localhost:8000/health
 
 ## 📡 API Endpoints
 
-### `POST /jobs` — Thêm job listing
+### `POST /jobs` — Create a job listing
 ```bash
 curl -X POST http://localhost:8000/jobs \
   -H "Content-Type: application/json" \
@@ -89,7 +107,12 @@ curl -X POST http://localhost:8000/rag/query \
   -d '{"query": "AI engineer with Python and FastAPI experience", "top_k": 3}'
 ```
 
-### `GET /jobs/{id}` — Lấy job theo ID
+### `GET /jobs` — List all job listings (paginated)
+```bash
+curl "http://localhost:8000/jobs?skip=0&limit=10"
+```
+
+### `GET /jobs/{id}` — Get job by ID
 ```bash
 curl http://localhost:8000/jobs/1
 ```
@@ -101,46 +124,34 @@ curl http://localhost:8000/health
 ```
 
 ### Test 422 Validation Error (Swagger)
-Mở `http://localhost:8000/docs` → thử POST /jobs với `description` bỏ trống → nhận 422 Unprocessable Entity.
+Open `http://localhost:8000/docs` → try `POST /jobs` with an empty `description` → you will receive a `422 Unprocessable Entity`.
 
 ---
 
 ## ⚙️ Environment Variables
 
-All tuneable settings are loaded from `.env` (copy from `.env.example`):
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `POSTGRES_USER` | `postgres` | PostgreSQL username |
-| `POSTGRES_PASSWORD` | *(required)* | PostgreSQL password |
-| `POSTGRES_DB` | `ragdb` | PostgreSQL database name |
-| `GEMINI_API_KEY` | *(required)* | Google AI Studio API key |
-| `EMBEDDING_MODEL` | `BAAI/bge-m3` | HuggingFace model name for BGE-M3 |
-| `GENERATOR_MODEL` | `gemma-4-31b-it` | Gemini/Gemma model for answer generation |
-| `EMBEDDING_PRELOAD_ON_STARTUP` | `true` | Preload BGE-M3 into RAM on startup (set `false` to defer) |
-| `RAG_MAX_JOBS_IN_CONTEXT` | `5` | Max job listings passed to LLM context |
-| `RAG_MAX_DESCRIPTION_CHARS` | `1000` | Max chars per job description (min: 3, truncated with `...`) |
-| `RAG_MAX_TOTAL_CONTEXT_CHARS` | `4000` | Max total chars in LLM context window |
-| `RAG_CONTEXT_SEPARATOR` | `\n\n` | Separator between job blocks in context |
-| `UVICORN_WORKERS` | `1` | Number of uvicorn worker processes |
+See [docs/RUNBOOK.md §8](./docs/RUNBOOK.md#8-environment-variables-reference) for the full reference table of all configurable settings.
 
 ---
 
-## 🔑 Thay thế Embedding & LLM
+## 🔑 Design Decisions
 
-| File | Thay đổi |
-|------|----------|
-| `app/services/embedding.py` | BGE-M3 (1024-dim dense vectors) qua `FlagEmbedding`; thread-safe double-checked locking |
-| `app/services/rag_service.py` | `generate_answer()` gọi Gemma 4 qua Google GenAI SDK; prompt hardened against injection; runtime config via env vars |
+| File | Role |
+|------|------|
+| `app/services/embedding.py` | BGE-M3 (1024-dim dense vectors) via `FlagEmbedding`; thread-safe double-checked locking |
+| `app/services/reranker.py` | bge-reranker-v2-m3 via `FlagReranker`; thread-safe singleton; pairs naturally with BGE-M3 |
+| `app/services/rag_service.py` | Two-stage `retrieve_and_rerank()` — coarse top-20 cosine search → fine reranking → top-k; `generate_answer()` calls Gemma 4 |
+
+**Why two-stage?** Cosine similarity on dense vectors is fast but approximate — it ranks by embedding closeness, not by true query–document relevance. The reranker scores each (query, job) pair jointly using a cross-encoder, significantly improving precision at the cost of a small extra inference step on only 20 candidates.
 
 ---
 
-## 🛑 Các Sai Lầm Đã Tránh
+## 🛑 Common Mistakes Avoided
 
-Xem chi tiết trong [AVOIDANCE_TABLE.md](./docs/AVOIDANCE_TABLE.md).
+See [docs/AVOIDANCE_TABLE.md](./docs/AVOIDANCE_TABLE.md) for details on 9 pitfalls avoided during development.
 
 ---
 
 ## 📖 Runbook
 
-Xem [docs/RUNBOOK.md](./docs/RUNBOOK.md) cho hướng dẫn deploy, debug, và scale.
+See [docs/RUNBOOK.md](./docs/RUNBOOK.md) for deploy, debug, and scale instructions.

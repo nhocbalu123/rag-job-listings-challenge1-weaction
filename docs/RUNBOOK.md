@@ -1,9 +1,24 @@
 # RUNBOOK — RAG Job Listings API
 
+## Table of Contents
+
+1. [Deploy (First Time)](#1-deploy-first-time)
+2. [Seed Sample Data](#2-seed-sample-data)
+3. [Test RAG Query](#3-test-rag-query)
+4. [View Swagger UI](#4-view-swagger-ui)
+5. [Logs & Debug](#5-logs--debug)
+6. [Scale API Workers](#6-scale-api-workers)
+7. [Stop & Clean Up](#7-stop--clean-up)
+8. [Environment Variables Reference](#8-environment-variables-reference)
+9. [Docker Volume Permissions — Non-Root User](#9-docker-volume-permissions--non-root-user)
+10. [Troubleshooting](#10-troubleshooting)
+
+---
+
 ## Prerequisites
 - Docker ≥ 24.x
 - Docker Compose ≥ 2.x
-- Port 8000 và 5432 không bị chiếm
+- Ports 8000 and 5432 must be free
 
 ---
 
@@ -11,13 +26,13 @@
 
 ```bash
 cp .env.example .env
-# Đổi POSTGRES_PASSWORD thành password mạnh trong .env
+# Set a strong POSTGRES_PASSWORD in .env, and add your GEMINI_API_KEY
 docker-compose up --build -d
-docker ps                        # kiểm tra cả 2 container đang running
+docker ps                        # verify both containers are running
 curl http://localhost:8000/health
 ```
 
-**Lưu ý:** Lần đầu khởi động, API container có thể mất 1-2 phút để tải và preload model BGE-M3 (khoảng 2.2GB) vào RAM. Hãy kiểm tra logs (`docker-compose logs -f api`) để xem khi nào ứng dụng sẵn sàng.
+**Note:** Both models (BGE-M3 ~2.2 GB and bge-reranker-v2-m3 ~1.1 GB) load lazily on the first request that triggers them (preload is disabled in `docker-compose.yml`). The first call to `/rag/query` will be slower than normal. Monitor download progress with `docker-compose logs -f api`.
 
 Expected: `{"status":"ok","database":"connected"}`
 
@@ -26,7 +41,6 @@ Expected: `{"status":"ok","database":"connected"}`
 ## 2. Seed Sample Data
 
 ```bash
-# Thêm vài job listings
 for job in \
   '{"title":"AI Engineer","company":"FPT Software","location":"HCMC","description":"Build RAG pipelines and deploy LLM APIs using FastAPI and LangChain. Experience with vector databases preferred.","skills":["Python","FastAPI","LangChain","RAG"]}' \
   '{"title":"Backend Engineer","company":"VNG","location":"HCMC","description":"Develop high-performance REST APIs with FastAPI, manage PostgreSQL databases, optimize queries.","skills":["Python","FastAPI","PostgreSQL","Redis"]}' \
@@ -51,7 +65,7 @@ curl -X POST http://localhost:8000/rag/query \
 
 ## 4. View Swagger UI
 
-Mở trình duyệt: `http://localhost:8000/docs`
+Open in browser: `http://localhost:8000/docs`
 
 ---
 
@@ -68,7 +82,7 @@ docker-compose logs -f api     # Follow live logs
 ## 6. Scale API Workers
 
 ```bash
-# Tăng worker trong Dockerfile CMD hoặc override:
+# Increase workers via Dockerfile CMD or override:
 docker-compose up --scale api=2
 ```
 
@@ -78,107 +92,27 @@ docker-compose up --scale api=2
 
 ```bash
 docker-compose down            # stop containers
-docker-compose down -v         # stop + xóa volumes (data sẽ mất)
+docker-compose down -v         # stop + delete volumes (data will be lost)
 ```
 
 ---
 
-## 8. Upgrade Embedding Model (Đã thực hiện)
+## 8. Environment Variables Reference
 
-Sửa `app/services/embedding.py`:
-
-```python
-# Thread-safe lazy load with double-checked locking (see AVOIDANCE_TABLE.md #6)
-from threading import Lock
-from FlagEmbedding import BGEM3FlagModel
-import os
-
-_model = None
-_model_lock = Lock()
-
-def get_model():
-    global _model
-    if _model is None:
-        with _model_lock:
-            if _model is None:
-                model_name = os.getenv("EMBEDDING_MODEL", "BAAI/bge-m3")
-                # use_fp16=False: faster and safer on CPU (see AVOIDANCE_TABLE.md #3)
-                _model = BGEM3FlagModel(model_name, use_fp16=False)
-    return _model
-
-def embed(text: str) -> list[float]:
-    """Returns a 1024-dim dense vector using BGE-M3."""
-    model = get_model()
-    output = model.encode([text], return_dense=True, return_sparse=False, return_colbert_vecs=False)
-    vec = output['dense_vecs'][0]
-    return vec.tolist()
-```
-
-Đã thêm vào requirements.txt: `FlagEmbedding>=1.2.10` và `transformers<4.45.0`
-
----
-
-## 9. Thay Mock LLM bằng Real LLM (Đã thực hiện)
-
-Sửa `app/services/rag_service.py` → `generate_answer()`:
-
-```python
-from google import genai
-import os
-
-def generate_answer(query: str, jobs) -> str:
-    if not jobs:
-        return f'No relevant job listings found for "{query}".'
-
-    api_key = os.getenv("GEMINI_API_KEY")
-    if not api_key:
-        raise ValueError(
-            "GEMINI_API_KEY environment variable is not set. "
-            "Add it to your .env file (see .env.example)."
-        )
-    client = genai.Client(api_key=api_key)
-
-    # All RAG limits are configurable via env vars (see AVOIDANCE_TABLE.md #7, #8)
-    GENERATOR_MODEL         = os.getenv("GENERATOR_MODEL", "gemma-4-31b-it")
-    max_jobs_in_context     = _get_positive_int_env("RAG_MAX_JOBS_IN_CONTEXT", 5)
-    max_description_chars   = _get_positive_int_env("RAG_MAX_DESCRIPTION_CHARS", 1000, min_value=3)
-    max_total_context_chars = _get_positive_int_env("RAG_MAX_TOTAL_CONTEXT_CHARS", 4000)
-    context_separator       = os.getenv("RAG_CONTEXT_SEPARATOR", "\n\n")
-
-    # Prompt-injection hardening: fence each listing (see AVOIDANCE_TABLE.md #5)
-    context_parts = []
-    for j in jobs[:max_jobs_in_context]:
-        job_context = (
-            "BEGIN_JOB_LISTING\n"
-            f"Title: {j.title}\n"
-            "Description:\n"
-            "```text\n"
-            f"{description}\n"
-            "```\n"
-            "END_JOB_LISTING"
-        )
-        context_parts.append(job_context)
-    context = context_separator.join(context_parts)
-
-    try:
-        response = client.models.generate_content(model=GENERATOR_MODEL, contents=prompt)
-        return (response.text or "").strip()
-    except Exception as e:
-        raise RuntimeError(f"Error generating answer ({type(e).__name__}): {e}") from e
-```
-
-Đã thêm `GEMINI_API_KEY` và các `RAG_MAX_*` vars vào `.env`.
-
----
-
-## 10. Environment Variables Reference
+All configurable settings. Copy `.env.example` → `.env` and override as needed.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `GEMINI_API_KEY` | *(required)* | Google AI Studio key — raise `ValueError` at request time if missing |
+| `POSTGRES_USER` | `postgres` | PostgreSQL username |
+| `POSTGRES_PASSWORD` | *(required)* | PostgreSQL password |
+| `POSTGRES_DB` | `ragdb` | PostgreSQL database name |
+| `GEMINI_API_KEY` | *(required)* | Google AI Studio key — raises `ValueError` at request time if missing |
 | `EMBEDDING_MODEL` | `BAAI/bge-m3` | HuggingFace model ID for embedding |
+| `RERANKER_MODEL` | `BAAI/bge-reranker-v2-m3` | HuggingFace model ID for reranker |
 | `GENERATOR_MODEL` | `gemma-4-31b-it` | Gemini/Gemma model for answer generation |
 | `EMBEDDING_PRELOAD_ON_STARTUP` | `true` | Preload BGE-M3 at startup; set `false` to load lazily on first request |
+| `RERANKER_PRELOAD_ON_STARTUP` | `true` | Preload reranker at startup; set `false` to load lazily on first request |
+| `RETRIEVAL_K` | `20` | Internal candidate pool size before reranking (not in public API) |
 | `RAG_MAX_JOBS_IN_CONTEXT` | `5` | Max jobs sent to LLM (min: 1) |
 | `RAG_MAX_DESCRIPTION_CHARS` | `1000` | Max chars per description (min: 3; truncated with `...`) |
 | `RAG_MAX_TOTAL_CONTEXT_CHARS` | `4000` | Max total context size sent to LLM (min: 1) |
@@ -187,16 +121,68 @@ def generate_answer(query: str, jobs) -> str:
 
 ---
 
-## 11. Các Lỗi Thường Gặp
+## 9. Docker Volume Permissions — Non-Root User
 
-| Triệu chứng | Nguyên nhân | Giải pháp |
-|-------------|-------------|-----------|
-| `connection refused` khi API start | DB chưa ready | `depends_on + healthcheck` đã xử lý; xem `docker-compose logs db` |
-| `422 Unprocessable Entity` | Input sai schema | Kiểm tra Pydantic validator, xem `/docs` |
-| `404 Not Found` cho `/jobs/{id}` | ID không tồn tại | Chạy `GET /jobs` để xem danh sách |
-| Container exit code 1 | Env var thiếu | Kiểm tra `.env` file — đặc biệt `GEMINI_API_KEY` và `POSTGRES_PASSWORD` |
-| `ValueError: GEMINI_API_KEY ... not set` | API key chưa set | Thêm `GEMINI_API_KEY=...` vào `.env` |
-| `ValueError: RAG_MAX_* must be an integer >= N` | Env var không phải số nguyên dương | Kiểm tra giá trị của `RAG_MAX_*` trong `.env` |
-| `RuntimeError: Error generating answer (APIError): ...` | Gemini API lỗi | Kiểm tra API key còn quota; xem tên model trong `GENERATOR_MODEL` |
-| `ValueError: Embedding dimension mismatch` | Job được embed với model cũ, query embed với model mới | Re-embed toàn bộ jobs sau khi thay đổi `EMBEDDING_MODEL` |
-| Model load chậm lần đầu | BGE-M3 chưa cache (`~2.2GB`) | `huggingface_cache` volume lưu lại sau lần đầu; xem `docker-compose logs -f api` |
+### Problem
+
+The container runs as non-root `appuser`. Docker named volumes are created with root ownership on first mount. If the Dockerfile does not pre-create `/tmp/huggingface` with the correct owner, any write to the volume (including lazy model loading) fails with:
+
+```
+PermissionError: [Errno 13] Permission denied: '/tmp/huggingface/models--BAAI--bge-reranker-v2-m3'
+ERROR:    Application startup failed. Exiting.
+```
+
+The container then enters a `Restarting (N)` loop and port 8000 is unreachable.
+
+### Fix (already applied)
+
+**Dockerfile** — create the directory with the correct owner *before* `USER appuser`:
+
+```dockerfile
+# Create HF cache dir owned by appuser so the named volume inherits correct permissions
+RUN mkdir -p /tmp/huggingface && chown -R appuser:appgroup /tmp/huggingface
+
+COPY --chown=appuser:appgroup app/ ./app/
+
+USER appuser
+```
+
+Docker named volumes copy ownership metadata from the image directory when first created empty. The new volume will be owned by `appuser`.
+
+**docker-compose.yml** — disable preload to avoid a crash before the volume is ready:
+
+```yaml
+environment:
+  EMBEDDING_PRELOAD_ON_STARTUP: "false"
+  RERANKER_PRELOAD_ON_STARTUP: "false"
+```
+
+### Recovery if the volume was created with wrong permissions
+
+```bash
+docker-compose down
+docker volume rm rag-job-listings-challenge1-weaction_huggingface_cache
+docker-compose up -d --build   # new volume is created with correct permissions from image
+```
+
+See [AVOIDANCE_TABLE.md #9](AVOIDANCE_TABLE.md#mistake-9--docker-named-volume-owned-by-root-crashes-non-root-container) for the background on why this happens.
+
+---
+
+## 10. Troubleshooting
+
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| `connection refused` on API start | DB not yet ready | `depends_on + healthcheck` handles this; check `docker-compose logs db` |
+| `422 Unprocessable Entity` | Invalid request schema | Check Pydantic validator; see `/docs` |
+| `404 Not Found` for `/jobs/{id}` | ID does not exist | Run `GET /jobs` to list available IDs |
+| Container exit code 1 | Missing env var | Check `.env` — especially `GEMINI_API_KEY` and `POSTGRES_PASSWORD` |
+| `ValueError: GEMINI_API_KEY ... not set` | API key not set | Add `GEMINI_API_KEY=...` to `.env` |
+| `ValueError: RAG_MAX_* must be an integer >= N` | Env var is not a positive integer | Check `RAG_MAX_*` values in `.env` |
+| `RuntimeError: Error generating answer (APIError): ...` | Gemini API error | Check API key quota; verify `GENERATOR_MODEL` name |
+| `ValueError: Embedding dimension mismatch` | Job embedded with old model, query with new model | Re-embed all jobs after changing `EMBEDDING_MODEL` |
+| BGE-M3 slow on first request | BGE-M3 not yet cached (~2.2 GB) | `huggingface_cache` volume persists after first download; monitor via `docker-compose logs -f api` |
+| Reranker slow on first request | bge-reranker-v2-m3 not yet cached (~1.1 GB) | `huggingface_cache` volume persists; set `RERANKER_PRELOAD_ON_STARTUP=false` to defer load |
+| Reranker returns unchanged results | Fewer than `top_k` jobs in DB | Cosine pool size = `min(RETRIEVAL_K, total jobs)` — add more jobs for reranking to take effect |
+| `PermissionError: [Errno 13] Permission denied: '/tmp/huggingface/...'` | Named volume owned by root; non-root `appuser` cannot write | See §9; run `docker-compose down && docker volume rm ..._huggingface_cache && docker-compose up -d --build` |
+| API container in `Restarting (N)` loop on startup | Startup crash — most commonly the permission error above | Run `docker logs <container-id>` to confirm; see row above for fix |

@@ -4,17 +4,25 @@ from fastapi import FastAPI
 from app.database import Base, engine
 from app.routers import health, jobs, rag
 from app.services.embedding import get_model
+from app.services.reranker import get_reranker
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     preload_enabled = os.getenv("EMBEDDING_PRELOAD_ON_STARTUP", "true").lower() == "true"
     if preload_enabled:
-        # Pre-load the embedding model on startup so the first request is fast
         print("Pre-loading BGE-M3 embedding model...")
         get_model()
-        print("Model loaded successfully!")
+        print("BGE-M3 loaded successfully.")
     else:
         print("Embedding model preload disabled by EMBEDDING_PRELOAD_ON_STARTUP.")
+
+    reranker_preload = os.getenv("RERANKER_PRELOAD_ON_STARTUP", "true").lower() == "true"
+    if reranker_preload:
+        print("Pre-loading bge-reranker-v2-m3 reranker model...")
+        get_reranker()
+        print("Reranker loaded successfully.")
+    else:
+        print("Reranker preload disabled by RERANKER_PRELOAD_ON_STARTUP.")
     yield
 
 # Create tables on startup (use Alembic for production migrations)
@@ -30,7 +38,7 @@ app = FastAPI(
         "A mini RAG pipeline for job listings: embed job descriptions, "
         "store in Postgres, retrieve by semantic similarity, generate answers."
     ),
-    version="1.2.0",
+    version="1.3.1",
     docs_url="/docs",
     redoc_url="/redoc",
     lifespan=lifespan,

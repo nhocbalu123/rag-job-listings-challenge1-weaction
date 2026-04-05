@@ -19,6 +19,9 @@ WORKDIR /app
 # Copy installed packages từ builder
 COPY --from=builder /install /usr/local
 
+# Create HF cache dir owned by appuser so the named volume inherits correct permissions
+RUN mkdir -p /tmp/huggingface && chown -R appuser:appgroup /tmp/huggingface
+
 # Copy source code
 COPY --chown=appuser:appgroup app/ ./app/
 

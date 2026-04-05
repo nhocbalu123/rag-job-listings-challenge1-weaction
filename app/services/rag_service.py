@@ -3,10 +3,16 @@ from typing import List, Tuple
 from sqlalchemy.orm import Session
 from app.models import JobListing, QueryLog
 from app.services.embedding import embed, cosine_similarity
+from app.services.reranker import rerank
 
 
 ELLIPSIS = "..."
 MIN_DESCRIPTION_CHARS = 3
+
+# Stage-1 retrieval pool size before reranking.
+# The user-facing top_k is the final result count; RETRIEVAL_K is the internal
+# candidate pool fed to the reranker. Kept private so the public API is unchanged.
+RETRIEVAL_K = int(os.getenv("RETRIEVAL_K", "20"))
 
 
 def _get_positive_int_env(name: str, default: int, *, min_value: int = 1) -> int:
@@ -33,6 +39,18 @@ def retrieve_top_k(db: Session, query: str, top_k: int) -> List[JobListing]:
 
     scored.sort(key=lambda x: x[0], reverse=True)
     return [job for _, job in scored[:top_k]]
+
+
+def retrieve_and_rerank(db: Session, query: str, top_k: int) -> List[JobListing]:
+    """Two-stage pipeline: embed-search (top RETRIEVAL_K) → rerank → top_k.
+
+    Stage 1 — coarse retrieval: fetch up to RETRIEVAL_K candidates using cosine
+    similarity on BGE-M3 dense vectors.
+    Stage 2 — fine reranking: score each candidate pair (query, job) with
+    bge-reranker-v2-m3 and return only the top top_k results.
+    """
+    candidates = retrieve_top_k(db, query, top_k=RETRIEVAL_K)
+    return rerank(query, candidates, top_n=top_k)
 
 
 def generate_answer(query: str, jobs: List[JobListing]) -> str:

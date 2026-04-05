@@ -26,6 +26,7 @@ services:
       HF_HOME: /tmp/huggingface
       TRANSFORMERS_CACHE: /tmp/huggingface
       EMBEDDING_PRELOAD_ON_STARTUP: "false"
+      RERANKER_PRELOAD_ON_STARTUP: "false"
     env_file:
       - .env
     volumes:

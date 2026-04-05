@@ -11,6 +11,31 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.3.1] - 2026-04-05
+
+### Fixed
+- `PermissionError: [Errno 13] Permission denied: '/tmp/huggingface/models--BAAI--bge-reranker-v2-m3'` — Dockerfile now runs `mkdir -p /tmp/huggingface && chown -R appuser:appgroup /tmp/huggingface` before the `USER appuser` switch so that newly-created named volumes inherit the correct ownership from the image
+- `RERANKER_PRELOAD_ON_STARTUP` was missing from `docker-compose.yml`; the code-level default of `true` caused the container to attempt a model download at startup before the volume permissions were properly initialized, entering a crash-restart loop — now explicitly set to `"false"` in `docker-compose.yml` (mirroring the existing `EMBEDDING_PRELOAD_ON_STARTUP: "false"` pattern; both models load lazily on first request)
+
+---
+
+## [1.3.0] - 2026-04-05
+
+### Added
+- `app/services/reranker.py` — new reranker module using `BAAI/bge-reranker-v2-m3` via `FlagReranker`; thread-safe double-checked locking singleton; handles single-job edge case where `compute_score` returns a bare float
+- `retrieve_and_rerank()` in `rag_service.py` — two-stage retrieval pipeline: coarse embed-search (top `RETRIEVAL_K` candidates) → fine reranking → final `top_k` results
+- `RETRIEVAL_K` constant (default `20`, overridable via env var) — internal candidate pool size; not exposed in the public API (Option A from the upgrade plan)
+- `RERANKER_MODEL` env var — reranker model name (default: `BAAI/bge-reranker-v2-m3`)
+- `RERANKER_PRELOAD_ON_STARTUP` env var — controls whether the reranker is preloaded on startup (default: `true`)
+
+### Changed
+- `POST /rag/query` now goes through the two-stage pipeline (`retrieve_and_rerank`) instead of direct cosine retrieval (`retrieve_top_k`)
+- `app/main.py` lifespan now preloads both the BGE-M3 embedder and the bge-reranker-v2-m3 reranker on startup (each independently toggle-able via env vars)
+- API version bumped to `1.3.0`
+- `.env.example` updated with `RERANKER_MODEL`, `RERANKER_PRELOAD_ON_STARTUP`, and `RETRIEVAL_K` entries
+
+---
+
 ## [1.2.0] - 2026-04-05
 
 ### Added
@@ -70,7 +95,7 @@ Versions follow [Semantic Versioning](https://semver.org/).
 - Non-root user inside container (`appuser`) for security
 - All secrets loaded from `.env` via `os.getenv()` — no hardcoded credentials
 - Routers split by domain into separate files (`routers/jobs.py`, `routers/rag.py`, `routers/health.py`)
-- `AVOIDANCE_TABLE.md` — documents 8 common mistakes avoided in this project
+- `AVOIDANCE_TABLE.md` — documents 4 common mistakes avoided in this project
 - `docs/RUNBOOK.md` — operational guide covering setup, running, and debugging
 
 ---
@@ -87,3 +112,13 @@ Versions follow [Semantic Versioning](https://semver.org/).
 - `.env.example` as a template for environment variable setup
 - `.gitignore` configured to exclude `.env`, `__pycache__`, and local data folders
 - Basic `README.md` with project overview
+
+---
+
+[Unreleased]: https://github.com/YOUR_USERNAME/rag-job-listings-challenge1-weaction/compare/v1.3.1...HEAD
+[1.3.1]: https://github.com/YOUR_USERNAME/rag-job-listings-challenge1-weaction/compare/v1.3.0...v1.3.1
+[1.3.0]: https://github.com/YOUR_USERNAME/rag-job-listings-challenge1-weaction/compare/v1.2.0...v1.3.0
+[1.2.0]: https://github.com/YOUR_USERNAME/rag-job-listings-challenge1-weaction/compare/v1.1.0...v1.2.0
+[1.1.0]: https://github.com/YOUR_USERNAME/rag-job-listings-challenge1-weaction/compare/v1.0.0...v1.1.0
+[1.0.0]: https://github.com/YOUR_USERNAME/rag-job-listings-challenge1-weaction/compare/v0.1.0...v1.0.0
+[0.1.0]: https://github.com/YOUR_USERNAME/rag-job-listings-challenge1-weaction/releases/tag/v0.1.0
