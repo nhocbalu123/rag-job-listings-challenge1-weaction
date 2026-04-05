@@ -8,14 +8,14 @@ from app.services.embedding import embed, cosine_similarity
 ELLIPSIS = "..."
 
 
-def _get_positive_int_env(name: str, default: int) -> int:
+def _get_positive_int_env(name: str, default: int, *, min_value: int = 1) -> int:
     value = os.getenv(name, str(default))
     try:
         parsed = int(value)
     except ValueError as e:
-        raise ValueError(f"{name} must be a positive integer. Got: {value}") from e
-    if parsed <= 0:
-        raise ValueError(f"{name} must be a positive integer. Got: {parsed}")
+        raise ValueError(f"{name} must be an integer >= {min_value}. Got: {value}") from e
+    if parsed < min_value:
+        raise ValueError(f"{name} must be an integer >= {min_value}. Got: {parsed}")
     return parsed
 
 
@@ -55,7 +55,9 @@ def generate_answer(query: str, jobs: List[JobListing]) -> str:
     client = genai.Client(api_key=api_key)
     GENERATOR_MODEL = os.getenv("GENERATOR_MODEL", "gemma-4-31b-it")
     max_jobs_in_context = _get_positive_int_env("RAG_MAX_JOBS_IN_CONTEXT", 5)
-    max_description_chars = _get_positive_int_env("RAG_MAX_DESCRIPTION_CHARS", 1000)
+    max_description_chars = _get_positive_int_env(
+        "RAG_MAX_DESCRIPTION_CHARS", 1000, min_value=len(ELLIPSIS)
+    )
     max_total_context_chars = _get_positive_int_env("RAG_MAX_TOTAL_CONTEXT_CHARS", 4000)
     context_separator = os.getenv("RAG_CONTEXT_SEPARATOR", "\n\n")
     separator_len = len(context_separator)
@@ -65,12 +67,9 @@ def generate_answer(query: str, jobs: List[JobListing]) -> str:
     for j in jobs[:max_jobs_in_context]:
         description = j.description or ""
         if len(description) > max_description_chars:
-            if max_description_chars >= len(ELLIPSIS):
-                description = (
-                    description[: max_description_chars - len(ELLIPSIS)].rstrip() + ELLIPSIS
-                )
-            else:
-                description = description[:max_description_chars]
+            description = (
+                description[: max_description_chars - len(ELLIPSIS)].rstrip() + ELLIPSIS
+            )
 
         # Delimiters + fenced description isolate untrusted listing content from instructions.
         job_context = (
@@ -116,7 +115,7 @@ Job listings:
         )
         return (response.text or "").strip()
     except Exception as e:
-        raise RuntimeError(f"Error generating answer: {type(e).__name__}") from e
+        raise RuntimeError(f"Error generating answer ({type(e).__name__}): {e}") from e
 
 
 def log_query(
