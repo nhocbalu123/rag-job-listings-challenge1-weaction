@@ -1,6 +1,6 @@
 # RAG Job Listings API — challenge1-weaction
 
-> **Mini RAG pipeline** cho job listings: embed mô tả công việc → lưu Postgres → truy vấn semantic similarity → trả về context + mock LLM answer.
+> **Mini RAG pipeline** cho job listings: embed mô tả công việc bằng BGE-M3 → lưu Postgres → truy vấn semantic similarity → trả về context + Gemma 4 LLM answer.
 
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.111-009688?logo=fastapi)](https://fastapi.tiangolo.com)
 [![Python](https://img.shields.io/badge/Python-3.11-blue?logo=python)](https://python.org)
@@ -12,8 +12,9 @@
 ## 🏗️ Architecture
 
 ```
-POST /jobs          → Embed text (bag-of-words, 256-dim) → Store in Postgres
-POST /rag/query     → Embed query → Cosine similarity → Top-K jobs → Mock LLM answer
+POST /jobs          → Embed text (BGE-M3, 1024-dim dense) → Store in Postgres
+POST /rag/query     → Embed query → Cosine similarity → Top-K jobs → Gemma 4 LLM answer
+GET  /jobs          → List all job listings (paginated)
 GET  /jobs/{id}     → Retrieve single job by ID
 GET  /health        → API + DB connectivity check
 ```
@@ -21,7 +22,7 @@ GET  /health        → API + DB connectivity check
 ```
 rag-job-listings-challenge1-weaction/
 ├── app/
-│   ├── main.py              # FastAPI app, router registration
+│   ├── main.py              # FastAPI app, lifespan model preload, router registration
 │   ├── database.py          # SQLAlchemy engine + DB retry on startup
 │   ├── models.py            # SQLAlchemy ORM + Pydantic schemas
 │   ├── routers/
@@ -29,14 +30,16 @@ rag-job-listings-challenge1-weaction/
 │   │   ├── jobs.py          # POST /jobs, GET /jobs/{id}, GET /jobs
 │   │   └── rag.py           # POST /rag/query
 │   └── services/
-│       ├── embedding.py     # embed() — swap with real model here
-│       └── rag_service.py   # retrieve_top_k, mock_llm_answer, log_query
-├── docs/RUNBOOK.md
-├── AVOIDANCE_TABLE.md
+│       ├── embedding.py     # BGE-M3 embedding (1024-dim), thread-safe lazy load
+│       └── rag_service.py   # retrieve_top_k, generate_answer (Gemma 4), log_query
+├── docs/
+│   ├── AVOIDANCE_TABLE.md   # 8 common mistakes avoided in this project
+│   ├── CHANGELOG.md         # Version history
+│   └── RUNBOOK.md           # Deploy, debug, and scale guide
 ├── Dockerfile               # Multi-stage, python:3.11-slim, non-root user
-├── docker-compose.yml       # API + Postgres, healthcheck, env injection
+├── docker-compose.yml       # API + Postgres, healthcheck, HF cache volume
 ├── requirements.txt
-└── .env.example
+└── .env.example             # All configurable env vars with defaults
 ```
 
 ---
@@ -102,12 +105,33 @@ Mở `http://localhost:8000/docs` → thử POST /jobs với `description` bỏ 
 
 ---
 
+## ⚙️ Environment Variables
+
+All tuneable settings are loaded from `.env` (copy from `.env.example`):
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `POSTGRES_USER` | `postgres` | PostgreSQL username |
+| `POSTGRES_PASSWORD` | *(required)* | PostgreSQL password |
+| `POSTGRES_DB` | `ragdb` | PostgreSQL database name |
+| `GEMINI_API_KEY` | *(required)* | Google AI Studio API key |
+| `EMBEDDING_MODEL` | `BAAI/bge-m3` | HuggingFace model name for BGE-M3 |
+| `GENERATOR_MODEL` | `gemma-4-31b-it` | Gemini/Gemma model for answer generation |
+| `EMBEDDING_PRELOAD_ON_STARTUP` | `true` | Preload BGE-M3 into RAM on startup (set `false` to defer) |
+| `RAG_MAX_JOBS_IN_CONTEXT` | `5` | Max job listings passed to LLM context |
+| `RAG_MAX_DESCRIPTION_CHARS` | `1000` | Max chars per job description (min: 3, truncated with `...`) |
+| `RAG_MAX_TOTAL_CONTEXT_CHARS` | `4000` | Max total chars in LLM context window |
+| `RAG_CONTEXT_SEPARATOR` | `\n\n` | Separator between job blocks in context |
+| `UVICORN_WORKERS` | `1` | Number of uvicorn worker processes |
+
+---
+
 ## 🔑 Thay thế Embedding & LLM
 
 | File | Thay đổi |
 |------|----------|
-| `app/services/embedding.py` | Đã thay hàm `embed()` bằng model BGE-M3 qua `FlagEmbedding` |
-| `app/services/rag_service.py` | Đã thay hàm `mock_llm_answer()` bằng `generate_answer()` gọi Gemma-4 qua Google GenAI SDK |
+| `app/services/embedding.py` | BGE-M3 (1024-dim dense vectors) qua `FlagEmbedding`; thread-safe double-checked locking |
+| `app/services/rag_service.py` | `generate_answer()` gọi Gemma 4 qua Google GenAI SDK; prompt hardened against injection; runtime config via env vars |
 
 ---
 

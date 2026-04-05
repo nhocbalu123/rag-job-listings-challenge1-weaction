@@ -11,6 +11,33 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.2.0] - 2026-04-05
+
+### Added
+- `EMBEDDING_PRELOAD_ON_STARTUP` env var — controls whether BGE-M3 is preloaded on startup (default: `true`); set to `false` to defer load to first request
+- `EMBEDDING_MODEL` env var — embedding model name (default: `BAAI/bge-m3`)
+- `GENERATOR_MODEL` env var — LLM model name (default: `gemma-4-31b-it`)
+- `RAG_MAX_JOBS_IN_CONTEXT` env var — max job listings passed to LLM context (default: `5`, min: `1`)
+- `RAG_MAX_DESCRIPTION_CHARS` env var — max chars per job description in context (default: `1000`, min: `3`)
+- `RAG_MAX_TOTAL_CONTEXT_CHARS` env var — max total context chars sent to LLM (default: `4000`, min: `1`)
+- `RAG_CONTEXT_SEPARATOR` env var — separator string between job blocks in LLM prompt (default: `\n\n`)
+- `UVICORN_WORKERS` env var — number of uvicorn worker processes
+- `huggingface_cache` named Docker volume for BGE-M3 model weight persistence across container restarts
+- `_get_positive_int_env()` internal helper validates all `RAG_MAX_*` env vars are positive integers at request time, raising descriptive `ValueError` on misconfiguration
+
+### Changed
+- Embedding model initialization is now thread-safe via double-checked locking with `threading.Lock`, preventing redundant concurrent downloads on startup
+- LLM prompt hardened against prompt injection: job listing content is fenced with `BEGIN_JOB_LISTING`/`END_JOB_LISTING` delimiters and description wrapped in a code block; system instructions explicitly tell the model to ignore listing content as instructions
+- Generation error messages now include the exception class name (e.g. `RuntimeError: Error generating answer (APIError): ...`) for faster root-cause identification
+- `cosine_similarity()` dimension mismatch error now explains probable root causes (different models or stale DB embeddings)
+- Context accumulation correctly accounts for separator length only after the first block, preventing off-by-one over-counting
+
+### Fixed
+- Fixed edge case where `RAG_MAX_DESCRIPTION_CHARS` < `len("...")` (3) would produce a negative slice index during description truncation; now enforced by `min_value=3` in config validation
+- Fixed Docker Compose comment wording and Dockerfile constant alignment
+
+---
+
 ## [1.1.0] - 2026-04-05
 
 ### Added

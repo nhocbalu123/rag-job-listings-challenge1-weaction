@@ -30,7 +30,7 @@ app = FastAPI(
         "A mini RAG pipeline for job listings: embed job descriptions, "
         "store in Postgres, retrieve by semantic similarity, generate answers."
     ),
-    version="1.1.0",
+    version="1.2.0",
     docs_url="/docs",
     redoc_url="/redoc",
     lifespan=lifespan,
