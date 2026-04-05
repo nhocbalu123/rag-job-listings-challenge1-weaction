@@ -17,6 +17,8 @@ docker ps                        # kiểm tra cả 2 container đang running
 curl http://localhost:8000/health
 ```
 
+**Lưu ý:** Lần đầu khởi động, API container có thể mất 1-2 phút để tải và preload model BGE-M3 (khoảng 2.2GB) vào RAM. Hãy kiểm tra logs (`docker-compose logs -f api`) để xem khi nào ứng dụng sẵn sàng.
+
 Expected: `{"status":"ok","database":"connected"}`
 
 ---
@@ -81,44 +83,53 @@ docker-compose down -v         # stop + xóa volumes (data sẽ mất)
 
 ---
 
-## 8. Upgrade Embedding Model
+## 8. Upgrade Embedding Model (Đã thực hiện)
 
 Sửa `app/services/embedding.py`:
 
 ```python
-# Thay thế embed() bằng sentence-transformers
-from sentence_transformers import SentenceTransformer
+# Đã thay thế embed() bằng BGE-M3
+from FlagEmbedding import BGEM3FlagModel
 
-_model = SentenceTransformer("all-MiniLM-L6-v2")
+# use_fp16=False: faster and safer on CPU (see AVOIDANCE_TABLE.md #3)
+_model = BGEM3FlagModel("BAAI/bge-m3", use_fp16=False)
 
 def embed(text: str) -> list[float]:
-    return _model.encode(text).tolist()
+    output = _model.encode([text], return_dense=True, return_sparse=False, return_colbert_vecs=False)
+    vec = output['dense_vecs'][0]
+    return vec.tolist()
 ```
 
-Thêm vào requirements.txt: `sentence-transformers==2.7.0`
+Đã thêm vào requirements.txt: `FlagEmbedding>=1.2.10` và `transformers<4.45.0`
 
 ---
 
-## 9. Thay Mock LLM bằng Real LLM
+## 9. Thay Mock LLM bằng Real LLM (Đã thực hiện)
 
-Sửa `app/services/rag_service.py` → `mock_llm_answer()`:
+Sửa `app/services/rag_service.py` → `generate_answer()`:
 
 ```python
-import openai, os
+from google import genai
+import os
 
-def mock_llm_answer(query: str, jobs) -> str:
-    context = "\n".join(f"- {j.title} at {j.company}: {j.description[:200]}" for j in jobs)
-    resp = openai.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[
-            {"role": "system", "content": "You are a job search assistant."},
-            {"role": "user", "content": f"Query: {query}\n\nContext:\n{context}\n\nAnswer:"}
-        ]
+def generate_answer(query: str, jobs) -> str:
+    api_key = os.getenv("GEMINI_API_KEY")
+    if not api_key:
+        raise ValueError(
+            "GEMINI_API_KEY environment variable is not set. "
+            "Add it to your .env file (see .env.example)."
+        )
+    client = genai.Client(api_key=api_key)
+    GENERATOR_MODEL = os.getenv("GENERATOR_MODEL", "gemma-4-31b-it")
+    # ... build context and prompt ...
+    response = client.models.generate_content(
+        model=GENERATOR_MODEL,
+        contents=prompt,
     )
-    return resp.choices[0].message.content
+    return response.text.strip()
 ```
 
-Thêm `OPENAI_API_KEY` vào `.env`.
+Đã thêm `GEMINI_API_KEY` vào `.env`.
 
 ---
 

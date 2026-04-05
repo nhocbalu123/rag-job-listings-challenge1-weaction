@@ -1,176 +1,71 @@
 # AVOIDANCE_TABLE.md — Các Lỗi Đã Tránh Được
 
-> Tôi đã tránh được ≥8 lỗi phổ biến khi build FastAPI + Docker + Postgres.  
+> Tôi đã tránh được các lỗi phổ biến khi build FastAPI + Docker + Postgres.  
 > Mỗi lỗi có mô tả cách xử lý + code snippet minh chứng.
 
 ---
 
-## Lỗi #1 — Base Image Cồng Kềnh
+## Lỗi #1 — Xung Đột Version Của Thư Viện `transformers`
 
-**Vấn đề:** Dùng `python:3.11` full image → ~900MB, chậm pull, tốn disk.  
-**Cách xử lý:** Multi-stage build với `python:3.11-slim` → image cuối ~180MB.
+**Vấn đề:** Khi sử dụng `FlagEmbedding` để gọi model BGE-M3, thư viện này phụ thuộc vào `transformers`. Ở các phiên bản `transformers` mới (>= 4.45.0), hàm `is_torch_fx_available` đã bị xóa, gây ra lỗi `ImportError: cannot import name 'is_torch_fx_available'` khi khởi động app.  
+**Cách xử lý:** Pin cứng phiên bản của `transformers` xuống dưới 4.45.0 trong `requirements.txt`.
 
-```dockerfile
-# Stage 1: builder
-FROM python:3.11-slim AS builder
-WORKDIR /app
-COPY requirements.txt .
-RUN pip install --prefix=/install --no-cache-dir -r requirements.txt
-
-# Stage 2: runtime — chỉ copy những gì cần
-FROM python:3.11-slim AS runtime
-COPY --from=builder /install /usr/local
-COPY --chown=appuser:appgroup app/ ./app/
+```txt
+# requirements.txt
+FlagEmbedding>=1.2.10
+transformers<4.45.0
 ```
 
 ---
 
-## Lỗi #2 — Chạy Container Với Quyền Root
+## Lỗi #2 — Lỗi Permission Khi Tải Model HuggingFace Trong Docker
 
-**Vấn đề:** Container chạy root → bảo mật kém, nếu bị exploit có thể chiếm host.  
-**Cách xử lý:** Tạo user không có quyền root, switch trước khi chạy app.
-
-```dockerfile
-RUN addgroup --system appgroup && adduser --system --ingroup appgroup appuser
-COPY --chown=appuser:appgroup app/ ./app/
-USER appuser
-```
-
----
-
-## Lỗi #3 — Hardcode Secrets
-
-**Vấn đề:** `DATABASE_URL = "postgresql://postgres:password@..."` trực tiếp trong code.  
-**Cách xử lý:** Đọc từ `os.getenv()`, inject qua docker-compose env_file.
-
-```python
-# app/database.py
-import os
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://postgres:postgres@db:5432/ragdb")
-```
+**Vấn đề:** Container chạy dưới quyền user `appuser` (non-root) không có thư mục home thực sự (`/nonexistent`). Khi `FlagEmbedding` cố gắng tải weights của model về cache mặc định (`~/.cache/huggingface/hub`), nó sẽ báo lỗi permission denied.  
+**Cách xử lý:** Ghi đè đường dẫn cache của HuggingFace và Transformers sang thư mục `/tmp` (nơi mọi user đều có quyền ghi) bằng cách truyền environment variables trong `docker-compose.yml`.
 
 ```yaml
 # docker-compose.yml
 services:
   api:
     environment:
-      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
-    env_file:
-      - .env
+      HF_HOME: /tmp/huggingface
+      TRANSFORMERS_CACHE: /tmp/huggingface
 ```
-
-`.env` file được thêm vào `.gitignore` — KHÔNG push lên GitHub.
 
 ---
 
-## Lỗi #4 — Không Có Healthcheck → API Start Trước DB
+## Lỗi #3 — Lazy Load Model Nặng Gây Chậm Request Đầu Tiên
 
-**Vấn đề:** `depends_on: db` chỉ đợi container start, không đợi Postgres sẵn sàng → `connection refused`.  
-**Cách xử lý:** Kết hợp `healthcheck` trên DB + `condition: service_healthy` + retry logic trong code.
-
-```yaml
-# docker-compose.yml
-services:
-  db:
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}"]
-      interval: 5s
-      retries: 10
-  api:
-    depends_on:
-      db:
-        condition: service_healthy  # ← đợi DB healthy mới start API
-```
+**Vấn đề:** Model BGE-M3 khá nặng (~2.2GB). Nếu load model ngay trong hàm `embed()` ở request đầu tiên (lazy loading), request `POST /jobs` đầu tiên sẽ bị treo hơn 1 phút. Ngoài ra, việc dùng `use_fp16=True` trên CPU thường không được tối ưu và có thể làm giảm hiệu năng.  
+**Cách xử lý:** Sử dụng event `lifespan` của FastAPI để preload model vào bộ nhớ ngay khi server startup. Đồng thời tắt `use_fp16=False` để tăng tốc độ inference trên CPU.
 
 ```python
-# app/database.py — retry logic phòng ngừa edge case
-def create_engine_with_retry(url, retries=10, delay=2):
-    for attempt in range(retries):
-        try:
-            engine = create_engine(url, pool_pre_ping=True)
-            with engine.connect() as conn:
-                conn.execute(text("SELECT 1"))
-            return engine
-        except Exception as e:
-            time.sleep(delay)
+# app/main.py
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    print("Pre-loading BGE-M3 embedding model...")
+    get_model()  # Load model vào RAM
+    yield
+
+app = FastAPI(lifespan=lifespan)
 ```
 
 ---
 
-## Lỗi #5 — Không Validate Input (Thiếu Pydantic)
+## Lỗi #4 — Truyền `None` Vào API Client Khi Thiếu API Key
 
-**Vấn đề:** Nhận JSON thô không validate → SQL injection, runtime error, dữ liệu rác vào DB.  
-**Cách xử lý:** Pydantic v2 schema cho mọi request/response, với `Field` validators.
+**Vấn đề:** `os.getenv("GEMINI_API_KEY")` trả về `None` nếu biến môi trường chưa được set. Khi `None` được truyền trực tiếp vào `genai.Client(api_key=None)`, client được khởi tạo thành công nhưng chỉ thất bại ở lúc gọi API với lỗi authentication khó hiểu — không chỉ rõ rằng key bị thiếu.  
+**Cách xử lý:** Validate key ngay trước khi tạo client, raise `ValueError` rõ ràng với hướng dẫn khắc phục nếu key bị thiếu.
 
 ```python
-# app/models.py
-class JobCreate(BaseModel):
-    title:       str  = Field(..., min_length=2, max_length=200)
-    description: str  = Field(..., min_length=10)
-    skills:      List[str] = Field(default_factory=list)
-
-    @field_validator("title", "company", "description")
-    @classmethod
-    def strip_whitespace(cls, v: str) -> str:
-        return v.strip()
-```
-
-Test: POST `/jobs` với description rỗng → nhận **422 Unprocessable Entity** tự động.
-
----
-
-## Lỗi #6 — Monolithic `main.py` (God File)
-
-**Vấn đề:** Nhét tất cả endpoints vào 1 file → khó maintain, test, review.  
-**Cách xử lý:** Tổ chức theo router folder, mỗi domain 1 file.
-
-```
-app/
-├── routers/
-│   ├── health.py   # GET /health
-│   ├── jobs.py     # POST /jobs, GET /jobs/{id}
-│   └── rag.py      # POST /rag/query
-└── services/
-    ├── embedding.py
-    └── rag_service.py
-```
-
-```python
-# app/main.py — chỉ đăng ký routers
-app.include_router(health.router)
-app.include_router(jobs.router)
-app.include_router(rag.router)
-```
-
----
-
-## Lỗi #7 — Không Có Error Handling Cho 404
-
-**Vấn đề:** Query không tìm thấy record → Python raise `AttributeError` hoặc trả 500.  
-**Cách xử lý:** Kiểm tra null, raise `HTTPException` với status code đúng.
-
-```python
-# app/routers/jobs.py
-def get_job(job_id: int, db: Session = Depends(get_db)):
-    job = db.query(JobListing).filter(JobListing.id == job_id).first()
-    if not job:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Job with id={job_id} not found.",
-        )
-    return job
-```
-
----
-
-## Lỗi #8 — Không Scale Workers
-
-**Vấn đề:** Chạy 1 uvicorn worker → bottleneck khi có nhiều request đồng thời.  
-**Cách xử lý:** Khởi động với `--workers 2` (hoặc điều chỉnh theo CPU cores).
-
-```dockerfile
-# Dockerfile — CMD với nhiều workers
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "2"]
+# app/services/rag_service.py
+api_key = os.getenv("GEMINI_API_KEY")
+if not api_key:
+    raise ValueError(
+        "GEMINI_API_KEY environment variable is not set. "
+        "Add it to your .env file (see .env.example)."
+    )
+client = genai.Client(api_key=api_key)
 ```
 
 ---
@@ -179,11 +74,7 @@ CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--worker
 
 | # | Lỗi | Giải pháp |
 |---|-----|-----------|
-| 1 | Base image nặng | `python:3.11-slim` + multi-stage build |
-| 2 | Chạy root | Non-root user `appuser` |
-| 3 | Hardcode secrets | `os.getenv()` + `.env` + `.gitignore` |
-| 4 | DB chưa ready | `healthcheck` + `condition: service_healthy` + retry |
-| 5 | Không validate input | Pydantic v2 `Field` + `field_validator` |
-| 6 | Monolithic code | Router folder structure |
-| 7 | Thiếu 404 handling | `HTTPException` với đúng status code |
-| 8 | 1 worker duy nhất | `uvicorn --workers 2` |
+| 1 | Lỗi import `transformers` | Pin version `transformers<4.45.0` |
+| 2 | Lỗi permission tải model HF | Set env `HF_HOME=/tmp/huggingface` |
+| 3 | Request đầu tiên quá chậm | Preload model bằng FastAPI `lifespan` + `use_fp16=False` |
+| 4 | `None` API key gây lỗi auth khó hiểu | Validate `GEMINI_API_KEY` sớm, raise `ValueError` rõ ràng |

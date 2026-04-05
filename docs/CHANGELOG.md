@@ -8,11 +8,22 @@ Versions follow [Semantic Versioning](https://semver.org/).
 ---
 
 ## [Unreleased]
-> Changes in progress, not yet released
+
+---
+
+## [1.1.0] - 2026-04-05
 
 ### Added
-- Real embedding model integration (replacing mock hash-based vectorizer)
-- Authentication endpoint for API access control
+- Real embedding model integration using BGE-M3 via `FlagEmbedding` (replacing mock hash-based vectorizer)
+- Real LLM generator integration using Gemma 4 via `google-genai` (replacing mock LLM answer)
+
+### Changed
+- Optimized embedding model loading: disabled `use_fp16` for faster CPU inference and implemented FastAPI `lifespan` to preload the BGE-M3 model on startup, eliminating the cold-start delay on the first request.
+
+### Fixed
+- Fixed `transformers` version conflict with `FlagEmbedding` by pinning `transformers<4.45.0`
+- Fixed HuggingFace cache permission denied error in Docker by setting `HF_HOME` and `TRANSFORMERS_CACHE` to `/tmp/huggingface`
+- Fixed silent `None` API key being passed to `genai.Client` when `GEMINI_API_KEY` is unset; now raises a descriptive `ValueError` early with instructions to check `.env`
 
 ---
 

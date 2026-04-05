@@ -50,7 +50,8 @@ cd rag-job-listings-challenge1-weaction
 
 # 2. Configure env
 cp .env.example .env
-# (Edit .env nếu cần thay đổi credentials)
+# Edit .env to add your GEMINI_API_KEY (create one in Google AI Studio) or configure local models
+# Optional: tune EMBEDDING_PRELOAD_ON_STARTUP/RAG_MAX_* and UVICORN_WORKERS for memory & latency
 
 # 3. Build & run
 docker-compose up --build -d
@@ -58,6 +59,7 @@ docker-compose up --build -d
 # 4. Verify
 docker ps
 curl http://localhost:8000/health
+
 ```
 
 ---
@@ -104,8 +106,8 @@ Mở `http://localhost:8000/docs` → thử POST /jobs với `description` bỏ 
 
 | File | Thay đổi |
 |------|----------|
-| `app/services/embedding.py` | Thay hàm `embed()` bằng `sentence-transformers` hoặc OpenAI Embeddings |
-| `app/services/rag_service.py` | Thay hàm `mock_llm_answer()` bằng OpenAI / Groq / Ollama call |
+| `app/services/embedding.py` | Đã thay hàm `embed()` bằng model BGE-M3 qua `FlagEmbedding` |
+| `app/services/rag_service.py` | Đã thay hàm `mock_llm_answer()` bằng `generate_answer()` gọi Gemma-4 qua Google GenAI SDK |
 
 ---
 
