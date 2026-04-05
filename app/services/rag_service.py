@@ -6,6 +6,7 @@ from app.services.embedding import embed, cosine_similarity
 
 
 ELLIPSIS = "..."
+MIN_DESCRIPTION_CHARS = 3
 
 
 def _get_positive_int_env(name: str, default: int, *, min_value: int = 1) -> int:
@@ -56,20 +57,19 @@ def generate_answer(query: str, jobs: List[JobListing]) -> str:
     GENERATOR_MODEL = os.getenv("GENERATOR_MODEL", "gemma-4-31b-it")
     max_jobs_in_context = _get_positive_int_env("RAG_MAX_JOBS_IN_CONTEXT", 5)
     max_description_chars = _get_positive_int_env(
-        "RAG_MAX_DESCRIPTION_CHARS", 1000, min_value=len(ELLIPSIS)
+        "RAG_MAX_DESCRIPTION_CHARS", 1000, min_value=MIN_DESCRIPTION_CHARS
     )
     max_total_context_chars = _get_positive_int_env("RAG_MAX_TOTAL_CONTEXT_CHARS", 4000)
     context_separator = os.getenv("RAG_CONTEXT_SEPARATOR", "\n\n")
     separator_len = len(context_separator)
+    description_trim_length = max_description_chars - len(ELLIPSIS)
 
     context_parts: List[str] = []
     current_context_chars = 0
     for j in jobs[:max_jobs_in_context]:
         description = j.description or ""
         if len(description) > max_description_chars:
-            description = (
-                description[: max_description_chars - len(ELLIPSIS)].rstrip() + ELLIPSIS
-            )
+            description = description[:description_trim_length].rstrip() + ELLIPSIS
 
         # Delimiters + fenced description isolate untrusted listing content from instructions.
         job_context = (

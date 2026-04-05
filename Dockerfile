@@ -26,5 +26,5 @@ USER appuser
 
 EXPOSE 8000
 
-# Worker count is configurable to avoid high memory usage when embedding model is loaded per worker
+# Worker count is configurable to avoid high memory usage when the embedding model is loaded per worker
 CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers ${UVICORN_WORKERS:-1}"]
