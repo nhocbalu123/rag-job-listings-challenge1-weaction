@@ -43,6 +43,7 @@ def generate_answer(query: str, jobs: List[JobListing]) -> str:
     max_jobs_in_context = int(os.getenv("RAG_MAX_JOBS_IN_CONTEXT", "5"))
     max_description_chars = int(os.getenv("RAG_MAX_DESCRIPTION_CHARS", "1000"))
     max_total_context_chars = int(os.getenv("RAG_MAX_TOTAL_CONTEXT_CHARS", "4000"))
+    context_separator = "\n\n"
 
     context_parts: List[str] = []
     current_context_chars = 0
@@ -51,6 +52,7 @@ def generate_answer(query: str, jobs: List[JobListing]) -> str:
         if len(description) > max_description_chars:
             description = description[: max_description_chars - 3].rstrip() + "..."
 
+        # Delimiters + fenced description isolate untrusted listing content from instructions.
         job_context = (
             "BEGIN_JOB_LISTING\n"
             f"Job ID: {j.id}\n"
@@ -64,13 +66,13 @@ def generate_answer(query: str, jobs: List[JobListing]) -> str:
             "```\n"
             "END_JOB_LISTING"
         )
-        separator_len = 2 if context_parts else 0
+        separator_len = len(context_separator) if context_parts else 0
         if current_context_chars + separator_len + len(job_context) > max_total_context_chars:
             break
         context_parts.append(job_context)
         current_context_chars += separator_len + len(job_context)
 
-    context = "\n\n".join(context_parts)
+    context = context_separator.join(context_parts)
 
     prompt = f"""
 You are a job-search assistant.
