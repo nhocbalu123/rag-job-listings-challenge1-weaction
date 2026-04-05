@@ -1,42 +1,31 @@
 """
-Lightweight embedding service using TF-IDF-style cosine similarity.
-Swap embed() with any real model (sentence-transformers, OpenAI) without
-changing the interface — just replace the implementation below.
+Embedding service using BGE-M3 via FlagEmbedding.
 """
 
-import math
-import re
+import os
 from typing import List
+from FlagEmbedding import BGEM3FlagModel
 
+_model = None
 
-def _tokenize(text: str) -> List[str]:
-    return re.findall(r"\w+", text.lower())
-
-
-def _term_freq(tokens: List[str]) -> dict:
-    tf: dict = {}
-    for t in tokens:
-        tf[t] = tf.get(t, 0) + 1
-    return tf
-
+def get_model():
+    global _model
+    if _model is None:
+        model_name = os.getenv("EMBEDDING_MODEL", "BAAI/bge-m3")
+        # use_fp16=False is usually faster and safer on CPU
+        _model = BGEM3FlagModel(model_name, use_fp16=False)
+    return _model
 
 def embed(text: str) -> List[float]:
     """
-    Returns a simple bag-of-words TF vector (fixed 256-dim hash trick).
-    Replace this with sentence-transformers or OpenAI for production.
+    Returns a 1024-dim vector using BGE-M3.
     """
-    tokens = _tokenize(text)
-    tf = _term_freq(tokens)
-    dim = 256
-    vec = [0.0] * dim
-    for word, count in tf.items():
-        idx = hash(word) % dim
-        vec[idx] += count
-    # L2 normalize
-    norm = math.sqrt(sum(x * x for x in vec)) or 1.0
-    return [x / norm for x in vec]
-
+    model = get_model()
+    # BGE-M3 encode returns a dict with 'dense_vecs'
+    output = model.encode([text], return_dense=True, return_sparse=False, return_colbert_vecs=False)
+    vec = output['dense_vecs'][0]
+    return vec.tolist()
 
 def cosine_similarity(a: List[float], b: List[float]) -> float:
     dot = sum(x * y for x, y in zip(a, b))
-    return dot  # both are already L2-normalized
+    return dot  # both are already L2-normalized by the model

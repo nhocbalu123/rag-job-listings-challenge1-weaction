@@ -1,6 +1,16 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from contextlib import asynccontextmanager
 from app.database import Base, engine
 from app.routers import health, jobs, rag
+from app.services.embedding import get_model
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Pre-load the embedding model on startup so the first request is fast
+    print("Pre-loading BGE-M3 embedding model...")
+    get_model()
+    print("Model loaded successfully!")
+    yield
 
 # Create tables on startup (use Alembic for production migrations)
 # checkfirst=True prevents errors if tables already exist
@@ -18,6 +28,7 @@ app = FastAPI(
     version="1.0.0",
     docs_url="/docs",
     redoc_url="/redoc",
+    lifespan=lifespan,
 )
 
 app.include_router(health.router)

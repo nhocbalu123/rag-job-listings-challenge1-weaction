@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models import RAGQueryRequest, RAGQueryResponse
-from app.services.rag_service import retrieve_top_k, mock_llm_answer, log_query
+from app.services.rag_service import retrieve_top_k, generate_answer, log_query
 
 router = APIRouter(prefix="/rag", tags=["RAG"])
 
@@ -16,11 +16,11 @@ def rag_query(payload: RAGQueryRequest, db: Session = Depends(get_db)):
     """
     1. Embeds the query text.
     2. Retrieves top-k semantically similar job listings from Postgres.
-    3. Passes context to mock LLM to generate an answer.
+    3. Passes context to Gemma LLM (via Google GenAI) to generate an answer.
     4. Logs the query + result to DB for tracking.
     """
     top_jobs = retrieve_top_k(db, payload.query, payload.top_k)
-    answer   = mock_llm_answer(payload.query, top_jobs)
+    answer   = generate_answer(payload.query, top_jobs)
     log      = log_query(
         db,
         query=payload.query,

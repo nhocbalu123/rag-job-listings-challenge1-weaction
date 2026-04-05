@@ -9,3 +9,4 @@ build/
 *.log
 .DS_Store
 postgres_data/
+rag-upgrade-plan-v2.pdf

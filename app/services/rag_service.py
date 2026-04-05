@@ -19,10 +19,9 @@ def retrieve_top_k(db: Session, query: str, top_k: int) -> List[JobListing]:
     return [job for _, job in scored[:top_k]]
 
 
-def mock_llm_answer(query: str, jobs: List[JobListing]) -> str:
+def generate_answer(query: str, jobs: List[JobListing]) -> str:
     """
-    Mock LLM response — replace with real call to OpenAI / Groq / local model.
-    Interface: context_jobs → structured answer string.
+    Generate an answer using Gemma 4 via Google GenAI SDK based on the retrieved jobs.
     """
     if not jobs:
         return (
@@ -30,17 +29,47 @@ def mock_llm_answer(query: str, jobs: List[JobListing]) -> str:
             "Try adding more jobs via POST /jobs."
         )
 
-    job_summaries = "\n".join(
-        f"- [{j.company}] {j.title} @ {j.location or 'Remote'}: "
-        f"{', '.join(j.skills[:5]) if j.skills else 'N/A'}"
-        for j in jobs
+    import os
+    from google import genai
+
+    client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+    GENERATOR_MODEL = os.getenv("GENERATOR_MODEL", "gemma-4-31b-it")
+
+    context = "\n\n".join(
+        [
+            (
+                f"Job ID: {j.id}\n"
+                f"Title: {j.title}\n"
+                f"Company: {j.company}\n"
+                f"Location: {j.location or 'Remote'}\n"
+                f"Skills: {', '.join(j.skills or [])}\n"
+                f"Description: {j.description}"
+            )
+            for j in jobs
+        ]
     )
 
-    return (
-        f'Based on your query "{query}", here are the most relevant job listings:\n\n'
-        f"{job_summaries}\n\n"
-        "[Mock LLM — swap with real model call in services/rag_service.py]"
-    )
+    prompt = f"""
+You are a job-search assistant.
+Answer the user's question using only the job listings below.
+If the answer is uncertain, say so.
+Prefer concise, factual answers.
+
+User query:
+{query}
+
+Job listings:
+{context}
+"""
+
+    try:
+        response = client.models.generate_content(
+            model=GENERATOR_MODEL,
+            contents=prompt,
+        )
+        return response.text.strip()
+    except Exception as e:
+        return f"Error generating answer: {str(e)}"
 
 
 def log_query(

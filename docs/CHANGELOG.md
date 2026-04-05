@@ -11,8 +11,16 @@ Versions follow [Semantic Versioning](https://semver.org/).
 > Changes in progress, not yet released
 
 ### Added
-- Real embedding model integration (replacing mock hash-based vectorizer)
-- Authentication endpoint for API access control
+- Real embedding model integration using BGE-M3 via `FlagEmbedding` (replacing mock hash-based vectorizer)
+- Real LLM generator integration using Gemma 4 via `google-genai` (replacing mock LLM answer)
+- `scripts/reembed_jobs.py` script to migrate existing database records to the new 1024-dimensional embeddings
+
+### Changed
+- Optimized embedding model loading: disabled `use_fp16` for faster CPU inference and implemented FastAPI `lifespan` to preload the BGE-M3 model on startup, eliminating the cold-start delay on the first request.
+
+### Fixed
+- Fixed `transformers` version conflict with `FlagEmbedding` by pinning `transformers<4.45.0`
+- Fixed HuggingFace cache permission denied error in Docker by setting `HF_HOME` and `TRANSFORMERS_CACHE` to `/tmp/huggingface`
 
 ---
 

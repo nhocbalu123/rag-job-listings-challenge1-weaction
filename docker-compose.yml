@@ -23,6 +23,8 @@ services:
     # Lỗi #3 tránh: secrets đọc từ env file, KHÔNG hardcode trong code
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-ragdb}
+      HF_HOME: /tmp/huggingface
+      TRANSFORMERS_CACHE: /tmp/huggingface
     env_file:
       - .env
     ports:
