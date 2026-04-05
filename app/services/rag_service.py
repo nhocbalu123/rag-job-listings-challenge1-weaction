@@ -32,7 +32,13 @@ def generate_answer(query: str, jobs: List[JobListing]) -> str:
     import os
     from google import genai
 
-    client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+    api_key = os.getenv("GEMINI_API_KEY")
+    if not api_key:
+        raise ValueError(
+            "GEMINI_API_KEY environment variable is not set. "
+            "Add it to your .env file (see .env.example)."
+        )
+    client = genai.Client(api_key=api_key)
     GENERATOR_MODEL = os.getenv("GENERATOR_MODEL", "gemma-4-31b-it")
 
     context = "\n\n".join(

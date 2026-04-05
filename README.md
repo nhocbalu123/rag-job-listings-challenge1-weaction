@@ -59,10 +59,6 @@ docker-compose up --build -d
 docker ps
 curl http://localhost:8000/health
 
-# 5. Re-embed existing jobs (if upgrading from the old hash-trick embeddings)
-# The new BGE-M3 model uses 1024 dimensions instead of 256.
-# Run this script to update existing database records:
-docker-compose exec api python scripts/reembed_jobs.py
 ```
 
 ---

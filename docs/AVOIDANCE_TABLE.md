@@ -52,6 +52,24 @@ app = FastAPI(lifespan=lifespan)
 
 ---
 
+## Lỗi #4 — Truyền `None` Vào API Client Khi Thiếu API Key
+
+**Vấn đề:** `os.getenv("GEMINI_API_KEY")` trả về `None` nếu biến môi trường chưa được set. Khi `None` được truyền trực tiếp vào `genai.Client(api_key=None)`, client được khởi tạo thành công nhưng chỉ thất bại ở lúc gọi API với lỗi authentication khó hiểu — không chỉ rõ rằng key bị thiếu.  
+**Cách xử lý:** Validate key ngay trước khi tạo client, raise `ValueError` rõ ràng với hướng dẫn khắc phục nếu key bị thiếu.
+
+```python
+# app/services/rag_service.py
+api_key = os.getenv("GEMINI_API_KEY")
+if not api_key:
+    raise ValueError(
+        "GEMINI_API_KEY environment variable is not set. "
+        "Add it to your .env file (see .env.example)."
+    )
+client = genai.Client(api_key=api_key)
+```
+
+---
+
 ## Tổng Kết
 
 | # | Lỗi | Giải pháp |
@@ -59,3 +77,4 @@ app = FastAPI(lifespan=lifespan)
 | 1 | Lỗi import `transformers` | Pin version `transformers<4.45.0` |
 | 2 | Lỗi permission tải model HF | Set env `HF_HOME=/tmp/huggingface` |
 | 3 | Request đầu tiên quá chậm | Preload model bằng FastAPI `lifespan` + `use_fp16=False` |
+| 4 | `None` API key gây lỗi auth khó hiểu | Validate `GEMINI_API_KEY` sớm, raise `ValueError` rõ ràng |
